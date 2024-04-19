@@ -1,0 +1,586 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+## Import libraries
+```{r}
+library(tidymodels)
+```
+
+## Import dataset
+```{r}
+df.train <- Train
+df.test <- Test
+head(df.train)
+```
+
+```{r}
+tail(df.train)
+```
+
+```{r}
+glimpse(df.train)
+```
+
+```{r}
+skimr::skim(df.train)
+```
+
+
+```{r}
+is.na(df.train) %>% colSums()
+```
+
+
+```{r}
+df.train <- df.train %>% 
+            mutate(Label = factor(Label))
+glimpse(df.train)
+```
+
+```{r}
+names(df.train)
+```
+## Modeling
+
+
+## Recipe
+```{r}
+df_rec <-
+  recipe(Label ~.,
+         data = df.train) %>%
+   update_role(ID, new_role = "ID") %>%
+  step_corr(all_predictors(), threshold = 0.7, method = "spearman") 
+summary(df_rec)
+```
+
+##
+```{r}
+prepped_data <- 
+  df_rec %>% # use the recipe object
+  prep() %>% # perform the recipe on training data
+  juice() # extract only the preprocessed dataframe 
+```
+
+##
+```{r}
+glimpse(prepped_data)
+```
+
+## Folds
+```{r}
+set.seed(1001)
+
+cv_folds <-
+ vfold_cv(df.train, 
+          v = 5, 
+          strata = Label ) 
+```
+
+
+
+## Modeling
+#4.*Logistic regression*
+
+#Specify model
+```{r}
+log_spec <- # your model specification
+  logistic_reg() %>%  # model type
+  set_engine(engine = "glm") %>%  # model engine
+  set_mode("classification") # model mode
+
+# Show your model specification
+log_spec
+```
+
+#Creating Workflow
+```{r}
+log_wflow <- # new workflow object
+ workflow() %>% # use workflow function
+ add_recipe(df_rec) %>%   # use the new recipe
+ add_model(log_spec)   # add your model spec
+
+# show object
+log_wflow
+```
+```{r}
+log_res <- 
+  log_wflow %>% 
+  fit_resamples(
+    resamples = cv_folds, 
+    metrics = metric_set(
+      recall, precision, f_meas, 
+      accuracy, kap,
+      roc_auc, sens, spec),
+    control = control_resamples(
+      save_pred = TRUE)
+    ) 
+```
+
+
+
+
+
+
+
+#
+```{r}
+# save model coefficients for a fitted model object from a workflow
+
+get_model <- function(x) {
+  pull_workflow_fit(x) %>% tidy()
+}
+
+# same as before with one exception
+log_res_2 <- 
+  log_wflow %>% 
+  fit_resamples(
+    resamples = cv_folds, 
+    metrics = metric_set(
+      recall, precision, f_meas, 
+      accuracy, kap,
+      roc_auc, sens, spec),
+    control = control_resamples(
+      save_pred = TRUE,
+      extract = get_model) # use extract and our new function
+    ) 
+```
+
+
+#Evaluate model
+```{r}
+all_coef <- map_dfr(log_res_2$.extracts, ~ .x[[1]][[1]])
+```
+
+#
+```{r}
+filter(all_coef, term == "DEROG")
+```
+
+#Performance metrics
+##Show average performance over all folds
+```{r}
+log_res %>%  collect_metrics(summarize = TRUE)
+```
+
+##Show performance for every single fold:
+
+
+```{r}
+log_res %>%  collect_metrics(summarize = FALSE)
+
+```
+
+#Collect predictions
+
+```{r}
+#our prediction saved as log_pred
+log_pred <- 
+  log_res %>%
+  #function to collect obtain the actual model predictions
+  collect_predictions()
+```
+
+##Confusion matrix
+```{r}
+log_pred %>% 
+  conf_mat(Label, .pred_class) 
+```
+##A quick visualizion of  our confusion matrix
+```{r}
+log_pred %>% 
+  conf_mat(Label, .pred_class) %>% 
+  autoplot(type = "mosaic")
+```
+
+## Heatmap of our confusion matrix
+```{r}
+log_pred %>% 
+  conf_mat(Label, .pred_class) %>% 
+  autoplot(type = "heatmap")
+```
+```{r}
+head(log_pred)
+```
+
+##ROC-Curve
+ROC curve for our 5 folds
+```{r}
+log_pred %>% 
+  group_by(id) %>% # id contains our folds
+  roc_curve(Label, .pred_0) %>% 
+  autoplot()
+```
+
+#Probability distributions
+Plot predicted probability distributions for our two classes.
+```{r}
+log_pred %>% 
+  ggplot() +
+  geom_density(aes(x = .pred_0, 
+                   fill = Label), 
+               alpha = 0.5)
+```
+#5. Random forest
+
+## Specify models
+```{r}
+library(ranger)
+
+rf_spec <- 
+  rand_forest() %>% 
+  set_engine("ranger", importance = "impurity") %>% 
+  set_mode("classification")
+```
+
+
+## Bundle recipe and model:
+```{r}
+rf_wflow <-
+ workflow() %>%
+ add_recipe(df_rec) %>% 
+ add_model(rf_spec) 
+```
+
+## performance metrics.
+```{r}
+rf_res <-
+  rf_wflow %>% 
+  fit_resamples(
+    resamples = cv_folds, 
+    metrics = metric_set(
+      recall, precision, f_meas, 
+      accuracy, kap,
+      roc_auc, sens, spec),
+    control = control_resamples(save_pred = TRUE)
+    ) 
+
+rf_res %>%  collect_metrics(summarize = TRUE)
+```
+
+
+## Model coefficients
+```{r}
+# save model coefficients for a fitted model object from a workflow
+
+get_model <- function(x) {
+  pull_workflow_fit(x) %>% tidy()
+}
+
+# same as before with one exception
+rf_res_2 <- 
+  rf_wflow %>% 
+  fit_resamples(
+    resamples = cv_folds, 
+    metrics = metric_set(
+      recall, precision, f_meas, 
+      accuracy, kap,
+      roc_auc, sens, spec),
+    control = control_resamples(
+      save_pred = TRUE,
+      extract = get_model) # use extract and our new function
+    )
+```
+
+## Performance metrics
+
+
+### Show average performance over all folds
+```{r}
+rf_res %>%  collect_metrics(summarize = TRUE)
+```
+
+
+### Show performance for every single fold:
+```{r}
+rf_res %>%  collect_metrics(summarize = FALSE)
+```
+
+#### Collect predictions
+
+```{r}
+rf_pred <- 
+  rf_res %>%
+  collect_predictions()
+```
+
+#### Confusion matrix
+```{r}
+rf_pred %>% 
+  conf_mat(Label, .pred_class) 
+```
+
+###Quick visualization confusion matrix
+```{r}
+rf_pred %>% 
+  conf_mat(Label, .pred_class) %>% 
+  autoplot(type = "mosaic")
+```
+####Confusion matrix Heatmap
+```{r}
+rf_pred %>% 
+  conf_mat(Label, .pred_class) %>% 
+  autoplot(type = "heatmap")
+```
+###ROC-Curve
+ROC curve for our 5 folds
+```{r}
+rf_pred %>% 
+  group_by(id) %>% # id contains our folds
+  roc_curve(Label, .pred_0) %>% 
+  autoplot()
+```
+
+###Probability distributions
+```{r}
+rf_pred %>% 
+  ggplot() +
+  geom_density(aes(x = .pred_0, 
+                   fill = Label), 
+               alpha = 0.5)
+```
+
+#6:XGBoost
+##Boosted tree (XGBoost)
+#specify model
+```{r}
+library(xgboost)
+
+xgb_spec <- 
+  boost_tree() %>% 
+  set_engine("xgboost") %>% 
+  set_mode("classification") 
+```
+#Bundle recipe and model with workflows:
+```{r}
+xgb_wflow <-
+ workflow() %>%
+ add_recipe(df_rec) %>% 
+ add_model(xgb_spec)
+```
+
+
+
+
+#
+```{r}
+xgb_res <- 
+  xgb_wflow %>% 
+  fit_resamples(
+    resamples = cv_folds, 
+    metrics = metric_set(
+      recall, precision, f_meas, 
+      accuracy, kap,
+      roc_auc, sens, spec),
+    control = control_resamples(
+      save_pred = TRUE)
+    ) 
+```
+
+
+##metrics
+```{r}
+xgb_res <- 
+  xgb_wflow %>% 
+  fit_resamples(
+    resamples = cv_folds, 
+    metrics = metric_set(
+      recall, precision, f_meas, 
+      accuracy, kap,
+      roc_auc, sens, spec),
+    control = control_resamples(save_pred = TRUE)
+    ) 
+
+xgb_res %>% collect_metrics(summarize = TRUE)
+```
+
+
+#7:K-nearest neighbor
+
+# Specify model
+```{r}
+knn_spec <- 
+  nearest_neighbor(neighbors = 4) %>% # we can adjust the number of neighbors 
+  set_engine("kknn") %>% 
+  set_mode("classification") 
+```
+
+#Bundle recipe and model with workflows:
+
+```{r}
+knn_wflow <-
+ workflow() %>%
+ add_recipe(df_rec) %>% 
+ add_model(knn_spec)
+```
+
+#
+```{r}
+knn_res <- 
+  knn_wflow %>% 
+  fit_resamples(
+    resamples = cv_folds, 
+    metrics = metric_set(
+      recall, precision, f_meas, 
+      accuracy, kap,
+      roc_auc, sens, spec),
+    control = control_resamples(
+      save_pred = TRUE)
+    ) 
+```
+
+#
+```{r}
+knn_res <- 
+  knn_wflow %>% 
+  fit_resamples(
+    resamples = cv_folds, 
+    metrics = metric_set(
+      recall, precision, f_meas, 
+      accuracy, kap,
+      roc_auc, sens, spec),
+    control = control_resamples(save_pred = TRUE)
+    ) 
+
+knn_res %>% collect_metrics(summarize = TRUE)
+```
+
+
+ROC curve for our 5 folds
+```{r}
+rf_pred <- 
+  knn_res %>%
+  collect_predictions()
+
+rf_pred %>% 
+  group_by(id) %>% # id contains our folds
+  roc_curve(Label, .pred_0) %>% 
+  autoplot
+```
+#9.Compare models
+Extract metrics from our models to compare them:
+
+
+```{r}
+library(forcats) #for fct_reorder function
+log_metrics <- 
+  log_res %>% 
+  collect_metrics(summarise = TRUE) %>%
+  mutate(model = "Logistic Regression") # add the name of the model to every row
+
+rf_metrics <- 
+  rf_res %>% 
+  collect_metrics(summarise = TRUE) %>%
+  mutate(model = "Random Forest")
+
+xgb_metrics <- 
+  xgb_res %>% 
+  collect_metrics(summarise = TRUE) %>%
+  mutate(model = "XGBoost")
+
+knn_metrics <- 
+  knn_res %>% 
+  collect_metrics(summarise = TRUE) %>%
+  mutate(model = "Knn")
+
+# nnet_metrics <- 
+#   nnet_res %>% 
+#   collect_metrics(summarise = TRUE) %>%
+#   mutate(model = "Neural Net")
+
+# create dataframe with all models
+model_compare <- bind_rows(
+                          log_metrics,
+                           rf_metrics,
+                           xgb_metrics,
+                           knn_metrics,
+                         # nnet_metrics
+                           ) 
+
+# change data structure
+model_comp <- 
+  model_compare %>% 
+  select(model, .metric, mean, std_err) %>% 
+  pivot_wider(names_from = .metric, values_from = c(mean, std_err)) 
+ 
+# show mean F1-Score for every model
+model_comp %>% 
+  arrange(mean_f_meas) %>% 
+  mutate(model = fct_reorder(model, mean_f_meas)) %>% # order results
+  ggplot(aes(model, mean_f_meas, fill=model)) +
+  geom_col() +
+  coord_flip() +
+  scale_fill_brewer(palette = "Blues") +
+   geom_text(
+     size = 3,
+     aes(label = round(mean_f_meas, 2), y = mean_f_meas + 0.08),
+     vjust = 1
+  )
+
+```
+`OBSERVATION`:knn model performed best in our train set hence will be used on test set.
+
+```{r}
+# show mean area under the curve (auc) per model
+model_comp %>% 
+  arrange(mean_roc_auc) %>% 
+  mutate(model = fct_reorder(model, mean_roc_auc)) %>%
+  ggplot(aes(model, mean_roc_auc, fill=model)) +
+  geom_col() +
+  coord_flip() +
+  scale_fill_brewer(palette = "Blues") + 
+     geom_text(
+     size = 3,
+     aes(label = round(mean_roc_auc, 2), y = mean_roc_auc + 0.08),
+     vjust = 1
+  )
+```
+ Let’s find the maximum mean F1-Score:
+```{r}
+model_comp %>% slice_max(mean_f_meas)
+
+```
+
+
+
+## Making predictions
+we Will use random forest
+```{r}
+
+
+final_wf <- finalize_workflow(rf_wflow, rf_spec)
+final_mod <- final_wf %>% fit(df.train)
+
+
+
+predict_res <- predict(
+        final_mod,
+        df.test)
+
+
+
+```
+
+###
+
+```{r}
+result_2 <- data.frame(df.test$ID,predict_res$.pred_class)
+glimpse(result_2)
+
+
+#write.csv(result, "C:/Users/OMBATI/Desktop/R codes/UmojaHack\\dkutR2.csv", row.names=FALSE)
+
+```
+
+```{r}
+result_2 <- result_2 %>%
+          rename(ID = df.test.ID  ,Target = predict_res..pred_class )
+result_2
+```
+
+```{r}
+write.csv(result_2, "C:/Users/OMBATI/Desktop/R codes/UmojaHack\\dkutR3.csv", row.names=FALSE)
+```
+
